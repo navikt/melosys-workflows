@@ -89,8 +89,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        # Siste publiserte release, også prerelease: deploy-prod i appene deployer alle
-        # publiserte releaser, mens releases/latest hopper over prereleaser.
+        # Velger samme release som ligger i prod. deploy-prod deployer også releaser merket
+        # «pre-release», men GitHubs «Latest» hopper over dem. Drafts er ikke i prod.
         run: |
           prod_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
             --jq '[.[] | select(.draft | not)] | max_by(.published_at) | .tag_name // ""')
@@ -277,7 +277,7 @@ jobs:
           ref: ${{ needs.finn-commits.outputs.prod-sha }}
           persist-credentials: false
       # En release kan ha blitt publisert og deployet mens vi bygget. Samme oppslag som i
-      # finn-commits, så prereleaser også telles.
+      # finn-commits.
       - name: Er commiten fortsatt siste release?
         id: gjeldende
         env:
