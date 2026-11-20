@@ -6,7 +6,10 @@ name: Rebygg og deploy
 # https://sikkerhet.nav.no/docs/verktoy/chainguard-dockerimages
 #
 # Dev får siste commit på standardbranchen. Prod får koden fra siste publiserte release,
-# slik at rebygget aldri slipper ut kode som ikke er releaset.
+# slik at rebygget aldri slipper ut kode som ikke er releaset. Dev og prod bygges og
+# deployes uavhengig av hverandre: de bygger ulik kode, ingen tester kjører etter
+# dev-deployen, og Nais venter på readiness i prod. Feil i dev skal ikke holde prod
+# igjen med gammelt baseimage.
 
 on:
   workflow_call:
@@ -56,7 +59,7 @@ on:
         type: string
         default: nais/nais.yml
       prod:
-        description: Deploy også til prod (bare hvis dev gikk bra)
+        description: Deploy også til prod
         required: false
         type: boolean
         default: false
@@ -217,11 +220,7 @@ jobs:
   bygg-prod:
     name: Bygg release
     needs: finn-commits
-    # Er releasen samme commit som standardbranchen, gjenbrukes dev-imaget.
-    if: >-
-      inputs.prod
-      && needs.finn-commits.outputs.prod-sha != ''
-      && needs.finn-commits.outputs.prod-sha != github.sha
+    if: inputs.prod && needs.finn-commits.outputs.prod-sha != ''
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
     permissions:
@@ -256,14 +255,7 @@ jobs:
 
   deploy-prod:
     name: Deploy til prod
-    needs: [ finn-commits, bygg-dev, deploy-dev, bygg-prod ]
-    if: >-
-      !cancelled()
-      && inputs.prod
-      && needs.finn-commits.outputs.prod-sha != ''
-      && needs.deploy-dev.result == 'success'
-      && needs.deploy-dev.outputs.deployet == 'true'
-      && (needs.bygg-prod.result == 'success' || needs.bygg-prod.result == 'skipped')
+    needs: [ finn-commits, bygg-prod ]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -300,7 +292,7 @@ jobs:
           CLUSTER: ${{ inputs.prod-cluster }}
           RESOURCE: ${{ inputs.nais-resource }}
           VARS: ${{ inputs.prod-vars }}
-          IMAGE: ${{ needs.bygg-prod.outputs.image || needs.bygg-dev.outputs.image }}
+          IMAGE: ${{ needs.bygg-prod.outputs.image }}
           TIMEOUT: 20m
 
   # Egen jobb, så feil i alle de andre jobbene også varsles.
