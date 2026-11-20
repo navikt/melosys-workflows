@@ -77,6 +77,9 @@ jobs:
       dev-sha: ${{ steps.finn.outputs.dev-sha }}
       prod-sha: ${{ steps.finn.outputs.prod-sha }}
       prod-tag: ${{ steps.finn.outputs.prod-tag }}
+      dev-vars-1: ${{ steps.vars.outputs.vars-1 }}
+      dev-vars-2: ${{ steps.vars.outputs.vars-2 }}
+      dev-vars-3: ${{ steps.vars.outputs.vars-3 }}
     steps:
       - name: Siste commit og siste publiserte release
         id: finn
@@ -108,38 +111,111 @@ jobs:
             echo "Prod: ${prod_tag:-ingen release} ($prod_sha)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Fordel dev-vars
+        id: vars
+        env:
+          VARS: ${{ inputs.dev-vars }}
+        run: |
+          mapfile -t filer < <(grep -v '^[[:space:]]*$' <<< "$VARS" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if (( ${#filer[@]} < 1 || ${#filer[@]} > 3 )); then
+            echo "::error::dev-vars må ha én til tre filer, fikk ${#filer[@]}"
+            exit 1
+          fi
+          for i in "${!filer[@]}"; do
+            echo "vars-$((i + 1))=${filer[$i]}" >> "$GITHUB_OUTPUT"
+          done
+
   bygg-dev:
     name: Bygg standardbranch
     needs: finn-commits
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
-    uses: navikt/melosys-workflows/.github/workflows/bygg.yml@main
-    with:
-      ref: ${{ needs.finn-commits.outputs.dev-sha }}
-      bygg-kommando: ${{ inputs.bygg-kommando }}
-      byggverktoy: ${{ inputs.byggverktoy }}
-      java-versjon: ${{ inputs.java-versjon }}
-      team: ${{ inputs.team }}
-      platforms: ${{ inputs.platforms }}
-      runner: ${{ inputs.runner }}
-    secrets:
-      READER_TOKEN: ${{ secrets.READER_TOKEN }}
+    outputs:
+      image: ${{ steps.docker-push.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.finn-commits.outputs.dev-sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: ${{ inputs.java-versjon }}
+          distribution: temurin
+          cache: ${{ inputs.byggverktoy }}
+      - name: Bygg og test
+        env:
+          BYGG_KOMMANDO: ${{ inputs.bygg-kommando }}
+          GITHUB_TOKEN: ${{ github.token }}
+          READER_TOKEN: ${{ secrets.READER_TOKEN }}
+          PASSWORD: ${{ secrets.READER_TOKEN }}
+        run: bash -c "$BYGG_KOMMANDO"
+      # Ingen egen tag: imaget får en unik datotag, og deployen bruker digest. Sha-taggen
+      # skal fortsatt peke på imaget som ble testet da commiten ble merget.
+      - name: Bygg og publiser image
+        id: docker-push
+        uses: nais/docker-build-push@588f76a6f45aeb1e75d5e8417ec6ef6d79b2b39f # v0
+        with:
+          team: ${{ inputs.team }}
+          platforms: ${{ inputs.platforms }}
 
   deploy-dev:
-    name: Dev
+    name: Deploy til dev
     needs: [ finn-commits, bygg-dev ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
-    uses: navikt/melosys-workflows/.github/workflows/deploy.yml@main
-    with:
-      ref: ${{ needs.finn-commits.outputs.dev-sha }}
-      image: ${{ needs.bygg-dev.outputs.image }}
-      cluster: ${{ inputs.dev-cluster }}
-      vars: ${{ inputs.dev-vars }}
-      resource: ${{ inputs.nais-resource }}
-      gjeldende: branch
+    outputs:
+      deployet: ${{ steps.gjeldende.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.finn-commits.outputs.dev-sha }}
+          persist-credentials: false
+      # En vanlig deploy kan ha kommet med nyere kode mens vi bygget. Den har allerede
+      # ferskt baseimage, og vi skal ikke rulle tilbake til eldre kode.
+      - name: Er commiten fortsatt siste på standardbranchen?
+        id: gjeldende
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.finn-commits.outputs.dev-sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha)
+          if [[ "$naa" == "$SHA" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "$DEFAULT_BRANCH er nå $naa, ikke $SHA; hopper over dev-deploy" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-1 }}
+        if: steps.gjeldende.outputs.deploy == 'true'
+        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        env:
+          CLUSTER: ${{ inputs.dev-cluster }}
+          RESOURCE: ${{ inputs.nais-resource }}
+          VARS: ${{ needs.finn-commits.outputs.dev-vars-1 }}
+          IMAGE: ${{ needs.bygg-dev.outputs.image }}
+      - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-2 }}
+        if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-2 != ''
+        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        env:
+          CLUSTER: ${{ inputs.dev-cluster }}
+          RESOURCE: ${{ inputs.nais-resource }}
+          VARS: ${{ needs.finn-commits.outputs.dev-vars-2 }}
+          IMAGE: ${{ needs.bygg-dev.outputs.image }}
+      - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-3 }}
+        if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-3 != ''
+        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        env:
+          CLUSTER: ${{ inputs.dev-cluster }}
+          RESOURCE: ${{ inputs.nais-resource }}
+          VARS: ${{ needs.finn-commits.outputs.dev-vars-3 }}
+          IMAGE: ${{ needs.bygg-dev.outputs.image }}
 
   bygg-prod:
     name: Bygg release
@@ -149,23 +225,39 @@ jobs:
       inputs.prod
       && needs.finn-commits.outputs.prod-sha != ''
       && needs.finn-commits.outputs.prod-sha != needs.finn-commits.outputs.dev-sha
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
-    uses: navikt/melosys-workflows/.github/workflows/bygg.yml@main
-    with:
-      ref: ${{ needs.finn-commits.outputs.prod-sha }}
-      bygg-kommando: ${{ inputs.bygg-kommando }}
-      byggverktoy: ${{ inputs.byggverktoy }}
-      java-versjon: ${{ inputs.java-versjon }}
-      team: ${{ inputs.team }}
-      platforms: ${{ inputs.platforms }}
-      runner: ${{ inputs.runner }}
-    secrets:
-      READER_TOKEN: ${{ secrets.READER_TOKEN }}
+    outputs:
+      image: ${{ steps.docker-push.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.finn-commits.outputs.prod-sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: ${{ inputs.java-versjon }}
+          distribution: temurin
+          cache: ${{ inputs.byggverktoy }}
+      - name: Bygg og test
+        env:
+          BYGG_KOMMANDO: ${{ inputs.bygg-kommando }}
+          GITHUB_TOKEN: ${{ github.token }}
+          READER_TOKEN: ${{ secrets.READER_TOKEN }}
+          PASSWORD: ${{ secrets.READER_TOKEN }}
+        run: bash -c "$BYGG_KOMMANDO"
+      - name: Bygg og publiser image
+        id: docker-push
+        uses: nais/docker-build-push@588f76a6f45aeb1e75d5e8417ec6ef6d79b2b39f # v0
+        with:
+          team: ${{ inputs.team }}
+          platforms: ${{ inputs.platforms }}
 
   deploy-prod:
-    name: Prod
+    name: Deploy til prod
     needs: [ finn-commits, bygg-dev, deploy-dev, bygg-prod ]
     if: >-
       !cancelled()
@@ -173,17 +265,42 @@ jobs:
       && needs.finn-commits.outputs.prod-sha != ''
       && needs.deploy-dev.result == 'success'
       && (needs.bygg-prod.result == 'success' || needs.bygg-prod.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
-    uses: navikt/melosys-workflows/.github/workflows/deploy.yml@main
-    with:
-      ref: ${{ needs.finn-commits.outputs.prod-sha }}
-      image: ${{ needs.bygg-prod.outputs.image || needs.bygg-dev.outputs.image }}
-      cluster: ${{ inputs.prod-cluster }}
-      vars: ${{ inputs.prod-vars }}
-      resource: ${{ inputs.nais-resource }}
-      gjeldende: release
+    outputs:
+      deployet: ${{ steps.gjeldende.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.finn-commits.outputs.prod-sha }}
+          persist-credentials: false
+      # En release kan ha blitt publisert og deployet mens vi bygget.
+      - name: Er commiten fortsatt siste release?
+        id: gjeldende
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.finn-commits.outputs.prod-sha }}
+        run: |
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg t "refs/tags/$tag" '$t | @uri')" --jq .sha)
+          if [[ "$naa" == "$SHA" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "Siste release er $tag ($naa), ikke $SHA; hopper over prod-deploy" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Deploy ${{ inputs.prod-vars }}
+        if: steps.gjeldende.outputs.deploy == 'true'
+        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        env:
+          CLUSTER: ${{ inputs.prod-cluster }}
+          RESOURCE: ${{ inputs.nais-resource }}
+          VARS: ${{ inputs.prod-vars }}
+          IMAGE: ${{ needs.bygg-prod.outputs.image || needs.bygg-dev.outputs.image }}
+          TIMEOUT: 20m
 
   # Egen jobb, så feil i alle de andre jobbene også varsles.
   varsle:
