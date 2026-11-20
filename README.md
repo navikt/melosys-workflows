@@ -19,7 +19,7 @@ Workflowen:
 
 Kode som ikke er releaset, kommer aldri i prod: prod får alltid siste publiserte release
 (også prerelease, som `deploy-prod` i appene).
-Rett før hvert dev-miljø og før prod sjekkes det at commiten fortsatt er den siste. Har en
+Rett før deployen til dev og til prod sjekkes det at commiten fortsatt er den siste. Har en
 vanlig deploy kommet med nyere kode mens vi bygget, hoppes deployen over, så den ikke rulles
 tilbake. Prod deployes bare hvis alle dev-miljøene faktisk ble deployet i samme kjøring.
 Imaget får bare den unike datotaggen fra `nais/docker-build-push` og deployes med digest;
@@ -29,7 +29,8 @@ sha-taggen peker fortsatt på imaget som ble testet ved merge.
 
 - **Samtidige deployer:** sjekken over gjøres sekunder før deployen, men workflowen deler ikke
   lås med appens egne deploy-workflows. Publiseres en release eller merges noe akkurat i det
-  vinduet, kan rebygget overskrive den nyere deployen. Den rettes ved neste vanlige deploy.
+  vinduet, eller mellom to dev-miljøer, kan rebygget overskrive den nyere deployen. Den rettes
+  ved neste vanlige deploy.
 - **Manuell deploy til prod:** workflowen ser ikke hva som faktisk kjører i prod, bare siste
   publiserte release. Er en nyere commit deployet til prod manuelt etter siste release, ruller
   rebygget prod tilbake til releasen.
@@ -64,7 +65,7 @@ concurrency:
 
 jobs:
   rebygg:
-    uses: navikt/melosys-workflows/.github/workflows/rebygg-og-deploy.yml@v1
+    uses: navikt/melosys-workflows/.github/workflows/rebygg-og-deploy.yml@main
     with:
       bygg-kommando: ./mvnw clean package -B -e --settings .github/settings.xml
       byggverktoy: maven
@@ -112,5 +113,5 @@ varsel om det, må workflowen skrus på igjen under Actions i appen.
 
 ## Versjoner
 
-Appene bruker `@v1`. Endringer testes ved å peke én app mot en branch, og `v1` flyttes
-når de er godkjent. Endringer som krever at appene endrer oppsett, blir `v2`.
+Appene bruker `@main`, som i dok-workflows. Endringer gjelder alle appene så snart de er
+merget, og `main` krever derfor PR med godkjenning.

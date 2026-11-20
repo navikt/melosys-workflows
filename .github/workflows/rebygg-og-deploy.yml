@@ -170,67 +170,47 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      SHA: ${{ needs.finn-commits.outputs.dev-sha }}
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     outputs:
-      # true bare hvis alle dev-miljøene ble deployet; prod krever det.
-      deployet: >-
-        ${{ steps.sjekk-1.outputs.deploy == 'true'
-        && (needs.finn-commits.outputs.dev-vars-2 == '' || steps.sjekk-2.outputs.deploy == 'true')
-        && (needs.finn-commits.outputs.dev-vars-3 == '' || steps.sjekk-3.outputs.deploy == 'true') }}
+      deployet: ${{ steps.gjeldende.outputs.deploy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.finn-commits.outputs.dev-sha }}
           persist-credentials: false
       # En vanlig deploy kan ha kommet med nyere kode mens vi bygget. Den har allerede
-      # ferskt baseimage, og vi skal ikke rulle tilbake til eldre kode. Sjekkes før hvert
-      # miljø, siden en deploy kan ha kommet mellom dem.
-      - name: Lag sjekk av standardbranchen
+      # ferskt baseimage, og vi skal ikke rulle tilbake til eldre kode.
+      - name: Er commiten fortsatt siste på standardbranchen?
+        id: gjeldende
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.finn-commits.outputs.dev-sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          cat > "$RUNNER_TEMP/er-siste.sh" <<'EOF'
           naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha)
           if [[ "$naa" == "$SHA" ]]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo "$DEFAULT_BRANCH er nå $naa, ikke $SHA; hopper over resten av dev-deployen" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$DEFAULT_BRANCH er nå $naa, ikke $SHA; hopper over dev-deploy" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-          EOF
-
-      - name: Er commiten fortsatt siste på standardbranchen?
-        id: sjekk-1
-        run: bash "$RUNNER_TEMP/er-siste.sh"
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-1 }}
-        if: steps.sjekk-1.outputs.deploy == 'true'
+        if: steps.gjeldende.outputs.deploy == 'true'
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-1 }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
-
-      - name: Er commiten fortsatt siste på standardbranchen?
-        id: sjekk-2
-        if: steps.sjekk-1.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-2 != ''
-        run: bash "$RUNNER_TEMP/er-siste.sh"
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-2 }}
-        if: steps.sjekk-2.outputs.deploy == 'true'
+        if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-2 != ''
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-2 }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
-
-      - name: Er commiten fortsatt siste på standardbranchen?
-        id: sjekk-3
-        if: steps.sjekk-2.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-3 != ''
-        run: bash "$RUNNER_TEMP/er-siste.sh"
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-3 }}
-        if: steps.sjekk-3.outputs.deploy == 'true'
+        if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-3 != ''
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
