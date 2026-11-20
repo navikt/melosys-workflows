@@ -78,7 +78,6 @@ jobs:
     permissions:
       contents: read
     outputs:
-      dev-sha: ${{ steps.finn.outputs.dev-sha }}
       prod-sha: ${{ steps.finn.outputs.prod-sha }}
       prod-tag: ${{ steps.finn.outputs.prod-tag }}
       dev-vars-1: ${{ steps.vars.outputs.vars-1 }}
@@ -97,15 +96,12 @@ jobs:
             --jq '[.[] | select(.draft | not)] | max_by(.published_at) | .tag_name // ""')
           prod_sha=''
           if [[ -n "$prod_tag" ]]; then
-            prod_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg t "refs/tags/$prod_tag" '$t | @uri')" --jq .sha)
+            prod_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$prod_tag" --jq .sha)
           else
             echo "::warning::Fant ingen publisert release; prod rebygges ikke"
           fi
-          {
-            echo "dev-sha=$GITHUB_SHA"
-            echo "prod-sha=$prod_sha"
-            echo "prod-tag=$prod_tag"
-          } >> "$GITHUB_OUTPUT"
+          echo "prod-sha=$prod_sha" >> "$GITHUB_OUTPUT"
+          echo "prod-tag=$prod_tag" >> "$GITHUB_OUTPUT"
           {
             echo "Dev: $DEFAULT_BRANCH ($GITHUB_SHA)"
             echo "Prod: ${prod_tag:-ingen release} ($prod_sha)"
@@ -116,7 +112,7 @@ jobs:
         env:
           VARS: ${{ inputs.dev-vars }}
         run: |
-          mapfile -t filer < <(grep -v '^[[:space:]]*$' <<< "$VARS" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          read -r -d '' -a filer <<< "$VARS" || true
           if (( ${#filer[@]} < 1 || ${#filer[@]} > 3 )); then
             echo "::error::dev-vars må ha én til tre filer, fikk ${#filer[@]}"
             exit 1
@@ -139,7 +135,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.finn-commits.outputs.dev-sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
@@ -175,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.finn-commits.outputs.dev-sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       # En vanlig deploy kan ha kommet med nyere kode mens vi bygget. Den har allerede
       # ferskt baseimage, og vi skal ikke rulle tilbake til eldre kode.
@@ -183,7 +179,7 @@ jobs:
         id: gjeldende
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.finn-commits.outputs.dev-sha }}
+          SHA: ${{ github.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha)
@@ -225,7 +221,7 @@ jobs:
     if: >-
       inputs.prod
       && needs.finn-commits.outputs.prod-sha != ''
-      && needs.finn-commits.outputs.prod-sha != needs.finn-commits.outputs.dev-sha
+      && needs.finn-commits.outputs.prod-sha != github.sha
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
     permissions:
@@ -290,7 +286,7 @@ jobs:
         run: |
           tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
             --jq '[.[] | select(.draft | not)] | max_by(.published_at) | .tag_name // ""')
-          naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg t "refs/tags/$tag" '$t | @uri')" --jq .sha)
+          naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
           if [[ "$naa" == "$SHA" ]]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
@@ -314,44 +310,19 @@ jobs:
     if: always() && needs.finn-commits.result != 'skipped'
     runs-on: ubuntu-latest
     permissions: {}
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
     steps:
-      - name: Lag melding
-        id: melding
-        env:
-          APP: ${{ github.event.repository.name }}
-          FEILET: ${{ contains(needs.*.result, 'failure') }}
-          DEV: ${{ needs.deploy-dev.result }}
-          DEV_DEPLOYET: ${{ needs.deploy-dev.outputs.deployet }}
-          PROD_VALGT: ${{ inputs.prod }}
-          PROD: ${{ needs.deploy-prod.result }}
-          PROD_DEPLOYET: ${{ needs.deploy-prod.outputs.deployet }}
-          PROD_TAG: ${{ needs.finn-commits.outputs.prod-tag }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          HAR_WEBHOOK: ${{ secrets.SLACK_WEBHOOK != '' }}
-        run: |
-          status() {
-            if [[ "$1" == success && "$2" == false ]]; then echo "hoppet over (nyere deploy)"; else echo "$1"; fi
-          }
-          prod_status=$(status "$PROD" "$PROD_DEPLOYET")
-          if [[ "$PROD_VALGT" == true && "$PROD" == skipped && "$DEV" == success && "$DEV_DEPLOYET" != true ]]; then
-            prod_status="hoppet over (dev ble ikke deployet)"
-          fi
-          if [[ "$FEILET" == true ]]; then
-            echo "tittel=Rebygg av $APP feilet" >> "$GITHUB_OUTPUT"
-            echo "farge=danger" >> "$GITHUB_OUTPUT"
-          else
-            echo "tittel=Rebygg av $APP er ferdig" >> "$GITHUB_OUTPUT"
-            echo "farge=good" >> "$GITHUB_OUTPUT"
-          fi
-          echo "tekst=dev: $(status "$DEV" "$DEV_DEPLOYET") · prod (${PROD_TAG:-ingen release}): $prod_status · $RUN_URL" >> "$GITHUB_OUTPUT"
-          echo "har-webhook=$HAR_WEBHOOK" >> "$GITHUB_OUTPUT"
       - name: Slack-varsel
-        if: steps.melding.outputs.har-webhook == 'true'
+        if: env.SLACK_WEBHOOK != ''
         uses: rtCamp/action-slack-notify@06cc13f74fa8d4d2296c09455d91e9453e4025f4 # v2.4.1
         env:
-          SLACK_COLOR: ${{ steps.melding.outputs.farge }}
+          SLACK_COLOR: ${{ contains(needs.*.result, 'failure') && 'danger' || 'good' }}
           SLACK_USERNAME: Github Actions
           SLACK_ICON: https://github.com/github.png?size=48
-          SLACK_TITLE: ${{ steps.melding.outputs.tittel }}
-          SLACK_MESSAGE: ${{ steps.melding.outputs.tekst }}
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_TITLE: Rebygg av ${{ github.event.repository.name }} ${{ contains(needs.*.result, 'failure') && 'feilet' || 'er ferdig' }}
+          SLACK_MESSAGE: >-
+            dev: ${{ needs.deploy-dev.outputs.deployet == 'false' && 'hoppet over (nyere deploy)' || needs.deploy-dev.result }}
+            · prod (${{ needs.finn-commits.outputs.prod-tag || 'ingen release' }}):
+            ${{ needs.deploy-prod.outputs.deployet == 'false' && 'hoppet over (nyere deploy)' || needs.deploy-prod.result }}
+            · ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
