@@ -31,8 +31,9 @@ Legg til `.github/workflows/rebygg-og-deploy.yml` i appen og tilpass valgene:
 name: Rebygg og deploy
 on:
   schedule:
-    # Mandag morgen, så teamet er på jobb hvis noe feiler.
-    - cron: '0 7 * * 1'
+    # Mandag morgen, så teamet er på jobb hvis noe feiler. Ikke på hel time: da er
+    # lasten høyest, og GitHub kan forsinke eller i verste fall droppe kjøringen.
+    - cron: '17 7 * * 1'
       timezone: Europe/Oslo
   workflow_dispatch:
     inputs:
@@ -43,6 +44,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
   id-token: write
 
 concurrency:
@@ -90,7 +92,9 @@ første planlagte kjøring.
 | `READER_TOKEN` | Tilgjengelig i bygget som `READER_TOKEN` og `PASSWORD` |
 | `SLACK_WEBHOOK` | Varsler ikke hvis den mangler |
 
-Appens workflow må gi `contents: read` og `id-token: write`.
+Appens workflow må gi `contents: read`, `packages: read` og `id-token: write`. Hver jobb i
+den felles workflowen får bare de tilgangene den trenger. Kjøres den fra en annen branch
+enn standardbranchen, hoppes alt over.
 
 GitHub skrur av planlagte workflows etter 60 dager uten aktivitet i repoet. Kommer det
 varsel om det, må workflowen skrus på igjen under Actions i appen.

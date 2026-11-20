@@ -66,13 +66,17 @@ on:
       SLACK_WEBHOOK:
         required: false
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   finn-commits:
     name: Finn commits for dev og prod
+    # Manuell kjøring bruker workflow-filen fra valgt branch.
+    # Den skal ikke kunne deployes før endringene er på standardbranchen.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       dev-sha: ${{ steps.finn.outputs.dev-sha }}
       prod-sha: ${{ steps.finn.outputs.prod-sha }}
@@ -87,10 +91,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
-            echo "::error::Må kjøres fra $DEFAULT_BRANCH, ellers deployes en annen branch til dev"
-            exit 1
-          fi
           prod_tag='' prod_sha=''
           if prod_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>&1); then
             prod_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg t "refs/tags/$prod_tag" '$t | @uri')" --jq .sha)
@@ -132,6 +132,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      packages: read
       id-token: write
     outputs:
       image: ${{ steps.docker-push.outputs.image }}
@@ -229,6 +230,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      packages: read
       id-token: write
     outputs:
       image: ${{ steps.docker-push.outputs.image }}
@@ -306,8 +308,9 @@ jobs:
   varsle:
     name: Slack-varsel
     needs: [ finn-commits, bygg-dev, deploy-dev, bygg-prod, deploy-prod ]
-    if: always()
+    if: always() && needs.finn-commits.result != 'skipped'
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - name: Lag melding
         id: melding
