@@ -90,16 +90,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        # Siste publiserte release, også prerelease: deploy-prod i appene deployer alle
+        # publiserte releaser, mens releases/latest hopper over prereleaser.
         run: |
-          prod_tag='' prod_sha=''
-          if prod_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>&1); then
+          prod_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '[.[] | select(.draft | not)] | max_by(.published_at) | .tag_name // ""')
+          prod_sha=''
+          if [[ -n "$prod_tag" ]]; then
             prod_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg t "refs/tags/$prod_tag" '$t | @uri')" --jq .sha)
-          elif [[ "$prod_tag" == *"(HTTP 404)"* ]]; then
-            prod_tag=''
-            echo "::warning::Fant ingen publisert release; prod rebygges ikke"
           else
-            printf '%s\n' "$prod_tag" >&2
-            exit 1
+            echo "::warning::Fant ingen publisert release; prod rebygges ikke"
           fi
           {
             echo "dev-sha=$GITHUB_SHA"
@@ -170,47 +170,67 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ needs.finn-commits.outputs.dev-sha }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     outputs:
-      deployet: ${{ steps.gjeldende.outputs.deploy }}
+      # true bare hvis alle dev-miljøene ble deployet; prod krever det.
+      deployet: >-
+        ${{ steps.sjekk-1.outputs.deploy == 'true'
+        && (needs.finn-commits.outputs.dev-vars-2 == '' || steps.sjekk-2.outputs.deploy == 'true')
+        && (needs.finn-commits.outputs.dev-vars-3 == '' || steps.sjekk-3.outputs.deploy == 'true') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.finn-commits.outputs.dev-sha }}
           persist-credentials: false
       # En vanlig deploy kan ha kommet med nyere kode mens vi bygget. Den har allerede
-      # ferskt baseimage, og vi skal ikke rulle tilbake til eldre kode.
-      - name: Er commiten fortsatt siste på standardbranchen?
-        id: gjeldende
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.finn-commits.outputs.dev-sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      # ferskt baseimage, og vi skal ikke rulle tilbake til eldre kode. Sjekkes før hvert
+      # miljø, siden en deploy kan ha kommet mellom dem.
+      - name: Lag sjekk av standardbranchen
         run: |
+          cat > "$RUNNER_TEMP/er-siste.sh" <<'EOF'
           naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha)
           if [[ "$naa" == "$SHA" ]]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo "$DEFAULT_BRANCH er nå $naa, ikke $SHA; hopper over dev-deploy" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$DEFAULT_BRANCH er nå $naa, ikke $SHA; hopper over resten av dev-deployen" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+          EOF
+
+      - name: Er commiten fortsatt siste på standardbranchen?
+        id: sjekk-1
+        run: bash "$RUNNER_TEMP/er-siste.sh"
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-1 }}
-        if: steps.gjeldende.outputs.deploy == 'true'
+        if: steps.sjekk-1.outputs.deploy == 'true'
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-1 }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
+
+      - name: Er commiten fortsatt siste på standardbranchen?
+        id: sjekk-2
+        if: steps.sjekk-1.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-2 != ''
+        run: bash "$RUNNER_TEMP/er-siste.sh"
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-2 }}
-        if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-2 != ''
+        if: steps.sjekk-2.outputs.deploy == 'true'
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-2 }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
+
+      - name: Er commiten fortsatt siste på standardbranchen?
+        id: sjekk-3
+        if: steps.sjekk-2.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-3 != ''
+        run: bash "$RUNNER_TEMP/er-siste.sh"
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-3 }}
-        if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-3 != ''
+        if: steps.sjekk-3.outputs.deploy == 'true'
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
@@ -266,6 +286,7 @@ jobs:
       && inputs.prod
       && needs.finn-commits.outputs.prod-sha != ''
       && needs.deploy-dev.result == 'success'
+      && needs.deploy-dev.outputs.deployet == 'true'
       && (needs.bygg-prod.result == 'success' || needs.bygg-prod.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -279,14 +300,16 @@ jobs:
         with:
           ref: ${{ needs.finn-commits.outputs.prod-sha }}
           persist-credentials: false
-      # En release kan ha blitt publisert og deployet mens vi bygget.
+      # En release kan ha blitt publisert og deployet mens vi bygget. Samme oppslag som i
+      # finn-commits, så prereleaser også telles.
       - name: Er commiten fortsatt siste release?
         id: gjeldende
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.finn-commits.outputs.prod-sha }}
         run: |
-          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '[.[] | select(.draft | not)] | max_by(.published_at) | .tag_name // ""')
           naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg t "refs/tags/$tag" '$t | @uri')" --jq .sha)
           if [[ "$naa" == "$SHA" ]]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
@@ -319,6 +342,7 @@ jobs:
           FEILET: ${{ contains(needs.*.result, 'failure') }}
           DEV: ${{ needs.deploy-dev.result }}
           DEV_DEPLOYET: ${{ needs.deploy-dev.outputs.deployet }}
+          PROD_VALGT: ${{ inputs.prod }}
           PROD: ${{ needs.deploy-prod.result }}
           PROD_DEPLOYET: ${{ needs.deploy-prod.outputs.deployet }}
           PROD_TAG: ${{ needs.finn-commits.outputs.prod-tag }}
@@ -328,6 +352,10 @@ jobs:
           status() {
             if [[ "$1" == success && "$2" == false ]]; then echo "hoppet over (nyere deploy)"; else echo "$1"; fi
           }
+          prod_status=$(status "$PROD" "$PROD_DEPLOYET")
+          if [[ "$PROD_VALGT" == true && "$PROD" == skipped && "$DEV" == success && "$DEV_DEPLOYET" != true ]]; then
+            prod_status="hoppet over (dev ble ikke deployet)"
+          fi
           if [[ "$FEILET" == true ]]; then
             echo "tittel=Rebygg av $APP feilet" >> "$GITHUB_OUTPUT"
             echo "farge=danger" >> "$GITHUB_OUTPUT"
@@ -335,7 +363,7 @@ jobs:
             echo "tittel=Rebygg av $APP er ferdig" >> "$GITHUB_OUTPUT"
             echo "farge=good" >> "$GITHUB_OUTPUT"
           fi
-          echo "tekst=dev: $(status "$DEV" "$DEV_DEPLOYET") · prod (${PROD_TAG:-ingen release}): $(status "$PROD" "$PROD_DEPLOYET") · $RUN_URL" >> "$GITHUB_OUTPUT"
+          echo "tekst=dev: $(status "$DEV" "$DEV_DEPLOYET") · prod (${PROD_TAG:-ingen release}): $prod_status · $RUN_URL" >> "$GITHUB_OUTPUT"
           echo "har-webhook=$HAR_WEBHOOK" >> "$GITHUB_OUTPUT"
       - name: Slack-varsel
         if: steps.melding.outputs.har-webhook == 'true'

@@ -17,11 +17,22 @@ Workflowen:
    Er releasen samme commit som standardbranchen, brukes dev-imaget.
 4. Sender Slack-varsel med status for dev og prod.
 
-Kode som ikke er releaset, kommer aldri i prod: prod får alltid siste publiserte release.
-Rett før hver deploy sjekkes det at commiten fortsatt er den siste. Har en vanlig deploy
-kommet med nyere kode mens vi bygget, hoppes deployen over, så den ikke rulles tilbake.
+Kode som ikke er releaset, kommer aldri i prod: prod får alltid siste publiserte release
+(også prerelease, som `deploy-prod` i appene).
+Rett før hvert dev-miljø og før prod sjekkes det at commiten fortsatt er den siste. Har en
+vanlig deploy kommet med nyere kode mens vi bygget, hoppes deployen over, så den ikke rulles
+tilbake. Prod deployes bare hvis alle dev-miljøene faktisk ble deployet i samme kjøring.
 Imaget får bare den unike datotaggen fra `nais/docker-build-push` og deployes med digest;
 sha-taggen peker fortsatt på imaget som ble testet ved merge.
+
+### Kjente begrensninger
+
+- **Samtidige deployer:** sjekken over gjøres sekunder før deployen, men workflowen deler ikke
+  lås med appens egne deploy-workflows. Publiseres en release eller merges noe akkurat i det
+  vinduet, kan rebygget overskrive den nyere deployen. Den rettes ved neste vanlige deploy.
+- **Manuell deploy til prod:** workflowen ser ikke hva som faktisk kjører i prod, bare siste
+  publiserte release. Er en nyere commit deployet til prod manuelt etter siste release, ruller
+  rebygget prod tilbake til releasen.
 
 ### Ta i bruk i en app
 
