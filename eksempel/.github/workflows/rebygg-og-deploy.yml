@@ -1,0 +1,33 @@
+name: Rebygg og deploy
+# Startes av refresh-base-images.yml i navikt/melosys-workflows hver mandag, eller manuelt.
+on:
+  workflow_dispatch:
+    inputs:
+      prod:
+        description: Deploy også til prod (dev deployes alltid først)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: rebygg-og-deploy
+  cancel-in-progress: false
+
+jobs:
+  rebygg:
+    uses: navikt/melosys-workflows/.github/workflows/rebygg-og-deploy.yml@main
+    with:
+      bygg-kommando: ./mvnw clean package -B -e --settings .github/settings.xml
+      byggverktoy: maven
+      dev-cluster: dev-fss
+      dev-vars: |
+        nais/vars-q2.json
+        nais/vars-q1.json
+      prod-cluster: prod-fss
+      prod: ${{ inputs.prod }}
+    secrets:
+      READER_TOKEN: ${{ secrets.READER_TOKEN }}
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}

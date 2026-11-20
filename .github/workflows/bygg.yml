@@ -1,0 +1,79 @@
+name: Bygg image
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit som skal bygges
+        required: true
+        type: string
+      bygg-kommando:
+        description: Kommando som bygger og tester appen
+        required: true
+        type: string
+      byggverktoy:
+        description: maven eller gradle (styrer cache i setup-java)
+        required: true
+        type: string
+      java-versjon:
+        required: false
+        type: string
+        default: '21'
+      team:
+        required: false
+        type: string
+        default: teammelosys
+      platforms:
+        required: false
+        type: string
+        default: linux/amd64
+      runner:
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      READER_TOKEN:
+        required: false
+    outputs:
+      image:
+        description: Image med digest
+        value: ${{ jobs.bygg.outputs.image }}
+
+permissions:
+  contents: read
+
+jobs:
+  bygg:
+    name: Bygg ${{ inputs.ref }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.docker-push.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: ${{ inputs.java-versjon }}
+          distribution: temurin
+          cache: ${{ inputs.byggverktoy }}
+      - name: Bygg og test
+        env:
+          BYGG_KOMMANDO: ${{ inputs.bygg-kommando }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          READER_TOKEN: ${{ secrets.READER_TOKEN }}
+          PASSWORD: ${{ secrets.READER_TOKEN }}
+        run: eval "$BYGG_KOMMANDO"
+      # Ingen egen tag: imaget får en unik datotag, og deployen bruker digest. Sha-taggen
+      # skal fortsatt peke på imaget som ble testet da commiten ble merget.
+      - name: Bygg og publiser image
+        id: docker-push
+        uses: nais/docker-build-push@588f76a6f45aeb1e75d5e8417ec6ef6d79b2b39f # v0
+        with:
+          team: ${{ inputs.team }}
+          platforms: ${{ inputs.platforms }}

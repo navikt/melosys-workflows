@@ -1,0 +1,229 @@
+name: Rebygg og deploy
+
+# Chainguard-baseimagene får jevnlig sikkerhetsoppdateringer uten at taggen endres, og
+# Chainguard backporter ikke til eldre bygg. Uten rebygg blir en app som ikke har
+# endringer i egen kode, liggende med gamle sårbarheter.
+# https://sikkerhet.nav.no/docs/verktoy/chainguard-dockerimages
+#
+# Dev får siste commit på standardbranchen. Prod får koden fra siste publiserte release,
+# slik at rebygget aldri slipper ut kode som ikke er releaset.
+
+on:
+  workflow_call:
+    inputs:
+      bygg-kommando:
+        description: Kommando som bygger og tester appen
+        required: true
+        type: string
+      byggverktoy:
+        description: maven eller gradle (styrer cache i setup-java)
+        required: true
+        type: string
+      java-versjon:
+        required: false
+        type: string
+        default: '21'
+      team:
+        required: false
+        type: string
+        default: teammelosys
+      platforms:
+        description: Plattformer imaget bygges for
+        required: false
+        type: string
+        default: linux/amd64
+      runner:
+        description: Runner for byggejobbene
+        required: false
+        type: string
+        default: ubuntu-latest
+      dev-cluster:
+        required: true
+        type: string
+      dev-vars:
+        description: Én til tre vars-filer for dev, én per linje. Deployes i rekkefølge, og stopper ved første feil.
+        required: true
+        type: string
+      prod-cluster:
+        required: true
+        type: string
+      prod-vars:
+        required: false
+        type: string
+        default: nais/vars-prod.json
+      nais-resource:
+        required: false
+        type: string
+        default: nais/nais.yml
+      prod:
+        description: Deploy også til prod (bare hvis dev gikk bra)
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      READER_TOKEN:
+        required: false
+      SLACK_WEBHOOK:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  finn-commits:
+    name: Finn commits for dev og prod
+    runs-on: ubuntu-latest
+    outputs:
+      dev-sha: ${{ steps.finn.outputs.dev-sha }}
+      prod-sha: ${{ steps.finn.outputs.prod-sha }}
+      prod-tag: ${{ steps.finn.outputs.prod-tag }}
+    steps:
+      - name: Siste commit og siste publiserte release
+        id: finn
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "::error::Må kjøres fra $DEFAULT_BRANCH, ellers deployes en annen branch til dev"
+            exit 1
+          fi
+          prod_tag='' prod_sha=''
+          if prod_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>&1); then
+            prod_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg t "refs/tags/$prod_tag" '$t | @uri')" --jq .sha)
+          elif [[ "$prod_tag" == *"(HTTP 404)"* ]]; then
+            prod_tag=''
+            echo "::warning::Fant ingen publisert release; prod rebygges ikke"
+          else
+            printf '%s\n' "$prod_tag" >&2
+            exit 1
+          fi
+          {
+            echo "dev-sha=$GITHUB_SHA"
+            echo "prod-sha=$prod_sha"
+            echo "prod-tag=$prod_tag"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "Dev: $DEFAULT_BRANCH ($GITHUB_SHA)"
+            echo "Prod: ${prod_tag:-ingen release} ($prod_sha)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  bygg-dev:
+    name: Bygg standardbranch
+    needs: finn-commits
+    permissions:
+      contents: read
+      id-token: write
+    uses: navikt/melosys-workflows/.github/workflows/bygg.yml@main
+    with:
+      ref: ${{ needs.finn-commits.outputs.dev-sha }}
+      bygg-kommando: ${{ inputs.bygg-kommando }}
+      byggverktoy: ${{ inputs.byggverktoy }}
+      java-versjon: ${{ inputs.java-versjon }}
+      team: ${{ inputs.team }}
+      platforms: ${{ inputs.platforms }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      READER_TOKEN: ${{ secrets.READER_TOKEN }}
+
+  deploy-dev:
+    name: Dev
+    needs: [ finn-commits, bygg-dev ]
+    permissions:
+      contents: read
+      id-token: write
+    uses: navikt/melosys-workflows/.github/workflows/deploy.yml@main
+    with:
+      ref: ${{ needs.finn-commits.outputs.dev-sha }}
+      image: ${{ needs.bygg-dev.outputs.image }}
+      cluster: ${{ inputs.dev-cluster }}
+      vars: ${{ inputs.dev-vars }}
+      resource: ${{ inputs.nais-resource }}
+      gjeldende: branch
+
+  bygg-prod:
+    name: Bygg release
+    needs: finn-commits
+    # Er releasen samme commit som standardbranchen, gjenbrukes dev-imaget.
+    if: >-
+      inputs.prod
+      && needs.finn-commits.outputs.prod-sha != ''
+      && needs.finn-commits.outputs.prod-sha != needs.finn-commits.outputs.dev-sha
+    permissions:
+      contents: read
+      id-token: write
+    uses: navikt/melosys-workflows/.github/workflows/bygg.yml@main
+    with:
+      ref: ${{ needs.finn-commits.outputs.prod-sha }}
+      bygg-kommando: ${{ inputs.bygg-kommando }}
+      byggverktoy: ${{ inputs.byggverktoy }}
+      java-versjon: ${{ inputs.java-versjon }}
+      team: ${{ inputs.team }}
+      platforms: ${{ inputs.platforms }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      READER_TOKEN: ${{ secrets.READER_TOKEN }}
+
+  deploy-prod:
+    name: Prod
+    needs: [ finn-commits, bygg-dev, deploy-dev, bygg-prod ]
+    if: >-
+      !cancelled()
+      && inputs.prod
+      && needs.finn-commits.outputs.prod-sha != ''
+      && needs.deploy-dev.result == 'success'
+      && (needs.bygg-prod.result == 'success' || needs.bygg-prod.result == 'skipped')
+    permissions:
+      contents: read
+      id-token: write
+    uses: navikt/melosys-workflows/.github/workflows/deploy.yml@main
+    with:
+      ref: ${{ needs.finn-commits.outputs.prod-sha }}
+      image: ${{ needs.bygg-prod.outputs.image || needs.bygg-dev.outputs.image }}
+      cluster: ${{ inputs.prod-cluster }}
+      vars: ${{ inputs.prod-vars }}
+      resource: ${{ inputs.nais-resource }}
+      gjeldende: release
+
+  # Egen jobb, så feil i alle de andre jobbene også varsles.
+  varsle:
+    name: Slack-varsel
+    needs: [ finn-commits, bygg-dev, deploy-dev, bygg-prod, deploy-prod ]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lag melding
+        id: melding
+        env:
+          APP: ${{ github.event.repository.name }}
+          FEILET: ${{ contains(needs.*.result, 'failure') }}
+          DEV: ${{ needs.deploy-dev.result }}
+          DEV_DEPLOYET: ${{ needs.deploy-dev.outputs.deployet }}
+          PROD: ${{ needs.deploy-prod.result }}
+          PROD_DEPLOYET: ${{ needs.deploy-prod.outputs.deployet }}
+          PROD_TAG: ${{ needs.finn-commits.outputs.prod-tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HAR_WEBHOOK: ${{ secrets.SLACK_WEBHOOK != '' }}
+        run: |
+          status() {
+            if [[ "$1" == success && "$2" == false ]]; then echo "hoppet over (nyere deploy)"; else echo "$1"; fi
+          }
+          if [[ "$FEILET" == true ]]; then
+            echo "tittel=Rebygg av $APP feilet" >> "$GITHUB_OUTPUT"
+            echo "farge=danger" >> "$GITHUB_OUTPUT"
+          else
+            echo "tittel=Rebygg av $APP er ferdig" >> "$GITHUB_OUTPUT"
+            echo "farge=good" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tekst=dev: $(status "$DEV" "$DEV_DEPLOYET") · prod (${PROD_TAG:-ingen release}): $(status "$PROD" "$PROD_DEPLOYET") · $RUN_URL" >> "$GITHUB_OUTPUT"
+          echo "har-webhook=$HAR_WEBHOOK" >> "$GITHUB_OUTPUT"
+      - name: Slack-varsel
+        if: steps.melding.outputs.har-webhook == 'true'
+        uses: rtCamp/action-slack-notify@06cc13f74fa8d4d2296c09455d91e9453e4025f4 # v2.4.1
+        env:
+          SLACK_COLOR: ${{ steps.melding.outputs.farge }}
+          SLACK_USERNAME: Github Actions
+          SLACK_ICON: https://github.com/github.png?size=48
+          SLACK_TITLE: ${{ steps.melding.outputs.tittel }}
+          SLACK_MESSAGE: ${{ steps.melding.outputs.tekst }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}

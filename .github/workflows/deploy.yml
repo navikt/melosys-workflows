@@ -1,0 +1,132 @@
+name: Deploy image
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commiten imaget er bygget fra
+        required: true
+        type: string
+      image:
+        description: Image med digest
+        required: true
+        type: string
+      cluster:
+        required: true
+        type: string
+      vars:
+        description: Én til tre vars-filer, én per linje. Deployes i rekkefølge, og stopper ved første feil.
+        required: true
+        type: string
+      resource:
+        required: false
+        type: string
+        default: nais/nais.yml
+      gjeldende:
+        description: branch (ref må være siste commit på standardbranchen) eller release (ref må være siste publiserte release)
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: string
+        default: 20m
+    outputs:
+      deployet:
+        description: false hvis deployen ble hoppet over fordi en nyere commit er kommet til
+        value: ${{ jobs.deploy.outputs.deployet }}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy til ${{ inputs.cluster }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      deployet: ${{ steps.gjeldende.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Fordel vars-filer
+        id: vars
+        env:
+          VARS: ${{ inputs.vars }}
+        run: |
+          mapfile -t filer < <(grep -v '^[[:space:]]*$' <<< "$VARS" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if (( ${#filer[@]} < 1 || ${#filer[@]} > 3 )); then
+            echo "::error::vars må ha én til tre filer, fikk ${#filer[@]}"
+            exit 1
+          fi
+          for i in "${!filer[@]}"; do
+            if [[ ! -f "${filer[$i]}" ]]; then
+              echo "::error::Finner ikke ${filer[$i]}"
+              exit 1
+            fi
+            echo "vars-$((i + 1))=${filer[$i]}" >> "$GITHUB_OUTPUT"
+          done
+
+      # En vanlig deploy kan ha kommet med nyere kode mens vi bygget. Den har allerede
+      # ferskt baseimage, og vi skal ikke rulle tilbake til eldre kode.
+      - name: Er commiten fortsatt den som skal ligge ute?
+        id: gjeldende
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GJELDENDE: ${{ inputs.gjeldende }}
+          REF: ${{ inputs.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CLUSTER: ${{ inputs.cluster }}
+        run: |
+          case "$GJELDENDE" in
+            branch)
+              naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha)
+              ;;
+            release)
+              tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+              naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -rn --arg t "refs/tags/$tag" '$t | @uri')" --jq .sha)
+              ;;
+            *)
+              echo "::error::gjeldende må være branch eller release, fikk $GJELDENDE"
+              exit 1
+              ;;
+          esac
+          if [[ "$naa" == "$REF" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "Hopper over deploy til $CLUSTER: gjeldende $GJELDENDE er nå $naa, ikke $REF" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Deploy ${{ steps.vars.outputs.vars-1 }}
+        if: steps.gjeldende.outputs.deploy == 'true'
+        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        env:
+          CLUSTER: ${{ inputs.cluster }}
+          RESOURCE: ${{ inputs.resource }}
+          VARS: ${{ steps.vars.outputs.vars-1 }}
+          IMAGE: ${{ inputs.image }}
+          TIMEOUT: ${{ inputs.timeout }}
+      - name: Deploy ${{ steps.vars.outputs.vars-2 }}
+        if: steps.gjeldende.outputs.deploy == 'true' && steps.vars.outputs.vars-2 != ''
+        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        env:
+          CLUSTER: ${{ inputs.cluster }}
+          RESOURCE: ${{ inputs.resource }}
+          VARS: ${{ steps.vars.outputs.vars-2 }}
+          IMAGE: ${{ inputs.image }}
+          TIMEOUT: ${{ inputs.timeout }}
+      - name: Deploy ${{ steps.vars.outputs.vars-3 }}
+        if: steps.gjeldende.outputs.deploy == 'true' && steps.vars.outputs.vars-3 != ''
+        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        env:
+          CLUSTER: ${{ inputs.cluster }}
+          RESOURCE: ${{ inputs.resource }}
+          VARS: ${{ steps.vars.outputs.vars-3 }}
+          IMAGE: ${{ inputs.image }}
+          TIMEOUT: ${{ inputs.timeout }}

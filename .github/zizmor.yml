@@ -1,0 +1,7 @@
+# Egne workflows brukes med @main, som i dok-workflows, så rettelser gjelder alle appene med en gang.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "navikt/melosys-workflows/*": ref-pin
+        "*": hash-pin
