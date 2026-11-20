@@ -13,15 +13,31 @@ Workflowen:
 
 1. Finner siste commit på standardbranchen og commiten for siste publiserte release.
 2. Bygger standardbranchen med tester, og deployer til dev-miljøene i rekkefølge. Neste miljø deployes bare hvis forrige gikk bra.
-3. Hvis `prod` er valgt og dev gikk bra: bygger siste release på nytt og deployer den til prod.
-   Er releasen samme commit som standardbranchen, brukes dev-imaget.
+3. Hvis `prod` er valgt: bygger siste release på nytt med tester, og deployer den til prod.
 4. Sender Slack-varsel med status for dev og prod.
 
-Kode som ikke er releaset, kommer aldri i prod: prod får alltid siste publiserte release.
-Rett før hver deploy sjekkes det at commiten fortsatt er den siste. Har en vanlig deploy
-kommet med nyere kode mens vi bygget, hoppes deployen over, så den ikke rulles tilbake.
+Kode som ikke er releaset, kommer aldri i prod: prod får alltid siste publiserte release
+(også prerelease, som `deploy-prod` i appene).
+Rett før deployen til dev og til prod sjekkes det at commiten fortsatt er den siste. Har en
+vanlig deploy kommet med nyere kode mens vi bygget, hoppes deployen over, så den ikke rulles
+tilbake.
+
+Dev og prod bygges og deployes uavhengig av hverandre. De bygger ulik kode, og rebygget
+endrer bare baseimaget. Prod-bygget kjører testene på release-commiten, og Nais venter på
+readiness ved deploy, så en app som ikke starter på det nye baseimaget, blir ikke rullet ut.
+En feil eller en hoppet deploy i dev skal derfor ikke holde prod igjen med gammelt baseimage.
 Imaget får bare den unike datotaggen fra `nais/docker-build-push` og deployes med digest;
 sha-taggen peker fortsatt på imaget som ble testet ved merge.
+
+### Kjente begrensninger
+
+- **Samtidige deployer:** sjekken over gjøres sekunder før deployen, men workflowen deler ikke
+  lås med appens egne deploy-workflows. Publiseres en release eller merges noe akkurat i det
+  vinduet, eller mellom to dev-miljøer, kan rebygget overskrive den nyere deployen. Den rettes
+  ved neste vanlige deploy.
+- **Manuell deploy til prod:** workflowen ser ikke hva som faktisk kjører i prod, bare siste
+  publiserte release. Er en nyere commit deployet til prod manuelt etter siste release, ruller
+  rebygget prod tilbake til releasen.
 
 ### Ta i bruk i en app
 
@@ -31,18 +47,20 @@ Legg til `.github/workflows/rebygg-og-deploy.yml` i appen og tilpass valgene:
 name: Rebygg og deploy
 on:
   schedule:
-    # Mandag morgen, så teamet er på jobb hvis noe feiler.
-    - cron: '0 7 * * 1'
+    # Mandag morgen, så teamet er på jobb hvis noe feiler. Ikke på hel time: da er
+    # lasten høyest, og GitHub kan forsinke eller i verste fall droppe kjøringen.
+    - cron: '17 7 * * 1'
       timezone: Europe/Oslo
   workflow_dispatch:
     inputs:
       prod:
-        description: Deploy også til prod (dev deployes alltid først)
+        description: Deploy også til prod
         type: boolean
         default: false
 
 permissions:
   contents: read
+  packages: read
   id-token: write
 
 concurrency:
@@ -51,7 +69,7 @@ concurrency:
 
 jobs:
   rebygg:
-    uses: navikt/melosys-workflows/.github/workflows/rebygg-og-deploy.yml@v1
+    uses: navikt/melosys-workflows/.github/workflows/rebygg-og-deploy.yml@main
     with:
       bygg-kommando: ./mvnw clean package -B -e --settings .github/settings.xml
       byggverktoy: maven
@@ -90,12 +108,14 @@ første planlagte kjøring.
 | `READER_TOKEN` | Tilgjengelig i bygget som `READER_TOKEN` og `PASSWORD` |
 | `SLACK_WEBHOOK` | Varsler ikke hvis den mangler |
 
-Appens workflow må gi `contents: read` og `id-token: write`.
+Appens workflow må gi `contents: read`, `packages: read` og `id-token: write`. Hver jobb i
+den felles workflowen får bare de tilgangene den trenger. Kjøres den fra en annen branch
+enn standardbranchen, hoppes alt over.
 
 GitHub skrur av planlagte workflows etter 60 dager uten aktivitet i repoet. Kommer det
 varsel om det, må workflowen skrus på igjen under Actions i appen.
 
 ## Versjoner
 
-Appene bruker `@v1`. Endringer testes ved å peke én app mot en branch, og `v1` flyttes
-når de er godkjent. Endringer som krever at appene endrer oppsett, blir `v2`.
+Appene bruker `@main`, som i dok-workflows. Endringer gjelder alle appene så snart de er
+merget, og `main` krever derfor PR med godkjenning.
