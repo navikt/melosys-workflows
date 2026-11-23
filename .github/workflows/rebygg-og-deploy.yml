@@ -60,6 +60,16 @@ on:
         required: false
         type: boolean
         default: false
+      dev-var:
+        description: Template-variabler for dev som key=value, kommaseparert (VAR i nais/deploy). Kommer i tillegg til vars-filene.
+        required: false
+        type: string
+        default: ''
+      prod-var:
+        description: Template-variabler for prod som key=value, kommaseparert (VAR i nais/deploy). Kommer i tillegg til vars-filen.
+        required: false
+        type: string
+        default: ''
       nais-resource:
         required: false
         type: string
@@ -302,6 +312,7 @@ jobs:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-1 }}
+          VAR: ${{ inputs.dev-var }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-2 }}
         if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-2 != ''
@@ -310,6 +321,7 @@ jobs:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-2 }}
+          VAR: ${{ inputs.dev-var }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-3 }}
         if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-3 != ''
@@ -318,6 +330,7 @@ jobs:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-3 }}
+          VAR: ${{ inputs.dev-var }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
 
   bygg-prod:
@@ -395,6 +408,7 @@ jobs:
           CLUSTER: ${{ inputs.prod-cluster }}
           RESOURCE: ${{ inputs.prod-resource || inputs.nais-resource }}
           VARS: ${{ !inputs.uten-vars && inputs.prod-vars || '' }}
+          VAR: ${{ inputs.prod-var }}
           IMAGE: ${{ needs.bygg-prod.outputs.image }}
           TIMEOUT: 20m
 

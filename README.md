@@ -104,6 +104,8 @@ første planlagte kjøring.
 | `prod-cluster` | ja | | f.eks. `prod-fss` eller `prod-gcp` |
 | `prod-vars` | | `nais/vars-prod.json` | |
 | `uten-vars` | | `false` | Appen har ingen vars-filer. Dev og prod deployes uten vars |
+| `dev-var` | | | Template-variabler for dev, `key=value` kommaseparert (`VAR` i nais/deploy) |
+| `prod-var` | | | Template-variabler for prod, `key=value` kommaseparert |
 | `nais-resource` | | `nais/nais.yml` | |
 | `dev-resource` | | | Nais-ressurs for dev, når den er en annen enn i prod. Overstyrer `nais-resource` |
 | `prod-resource` | | | Nais-ressurs for prod, når den er en annen enn i dev. Overstyrer `nais-resource` |
