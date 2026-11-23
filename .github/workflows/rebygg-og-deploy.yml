@@ -345,7 +345,7 @@ jobs:
 
   # Egen jobb, så feil i alle de andre jobbene også varsles.
   varsle:
-    name: Slack-varsel
+    name: Slack-varsel og oppsummering
     needs: [ finn-commits, bygg-dev, deploy-dev, bygg-prod, deploy-prod ]
     if: always() && needs.finn-commits.result != 'skipped'
     runs-on: ubuntu-latest
