@@ -63,6 +63,16 @@ on:
         required: false
         type: boolean
         default: false
+      dev-deploy-workflow:
+        description: Appens vanlige deploy-workflow til dev, f.eks. deploy-dev.yaml. Brukes til å finne commiten som blir erstattet.
+        required: false
+        type: string
+        default: ''
+      prod-deploy-workflow:
+        description: Appens vanlige deploy-workflow til prod, f.eks. deploy-prod.yaml. Brukes til å finne commiten som blir erstattet.
+        required: false
+        type: string
+        default: ''
     secrets:
       READER_TOKEN:
         required: false
@@ -80,9 +90,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       prod-sha: ${{ steps.finn.outputs.prod-sha }}
       prod-tag: ${{ steps.finn.outputs.prod-tag }}
+      dev-forrige-sha: ${{ steps.forrige.outputs.dev-sha }}
+      prod-forrige-sha: ${{ steps.forrige.outputs.prod-sha }}
+      prod-forrige-tag: ${{ steps.forrige.outputs.prod-tag }}
       dev-vars-1: ${{ steps.vars.outputs.vars-1 }}
       dev-vars-2: ${{ steps.vars.outputs.vars-2 }}
       dev-vars-3: ${{ steps.vars.outputs.vars-3 }}
@@ -105,10 +119,44 @@ jobs:
           fi
           echo "prod-sha=$prod_sha" >> "$GITHUB_OUTPUT"
           echo "prod-tag=$prod_tag" >> "$GITHUB_OUTPUT"
+
+      # Workflowen ser ikke hva som kjører i clusteret, så commiten som erstattes er den
+      # fra siste vellykkede deploy-kjøring. Manuelle deployer kommer ikke med.
+      - name: Forrige deployede commit
+        id: forrige
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DEV_WORKFLOW: ${{ inputs.dev-deploy-workflow }}
+          PROD_WORKFLOW: ${{ inputs.prod-deploy-workflow }}
+        run: |
+          siste_vellykkede() {
+            [[ -n "$1" ]] || return 0
+            # gh skriver feilsvaret til stdout, så det må ikke slippe gjennom.
+            if ! svar=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$1/runs?status=success&per_page=1$2" \
+              --jq '.workflow_runs[0] | select(.) | "\(.created_at) \(.head_sha) \(.head_branch)"'); then
+              echo "::warning::Fant ikke kjøringer av $1" >&2
+              return 0
+            fi
+            echo "$svar"
+          }
+          # GITHUB_WORKFLOW_REF er appens workflow, f.eks. owner/repo/.github/workflows/rebygg-og-deploy.yml@refs/heads/main
+          rebygg=${GITHUB_WORKFLOW_REF%@*}
+          rebygg=${rebygg##*/}
+
+          read -r _ dev_sha _ < <({
+            siste_vellykkede "$DEV_WORKFLOW" "&branch=$DEFAULT_BRANCH"
+            siste_vellykkede "$rebygg" "&branch=$DEFAULT_BRANCH"
+          } | sort -r | head -1) || true
+          # Tidligere rebygg tas ikke med for prod: de deployer siste release, som
+          # deploy-workflowen allerede har deployet.
+          read -r _ prod_sha prod_tag < <(siste_vellykkede "$PROD_WORKFLOW" "") || true
+
           {
-            echo "Dev: $DEFAULT_BRANCH ($GITHUB_SHA)"
-            echo "Prod: ${prod_tag:-ingen release} ($prod_sha)"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "dev-sha=$dev_sha"
+            echo "prod-sha=$prod_sha"
+            echo "prod-tag=$prod_tag"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Fordel dev-vars
         id: vars
@@ -305,6 +353,41 @@ jobs:
     env:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
     steps:
+      - name: Oppsummering
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DEV_FORRIGE: ${{ needs.finn-commits.outputs.dev-forrige-sha }}
+          DEV_STATUS: ${{ needs.deploy-dev.outputs.deployet == 'false' && 'hoppet over (nyere deploy)' || needs.deploy-dev.result }}
+          PROD_VALGT: ${{ inputs.prod }}
+          PROD_FORRIGE: ${{ needs.finn-commits.outputs.prod-forrige-sha }}
+          PROD_FORRIGE_TAG: ${{ needs.finn-commits.outputs.prod-forrige-tag }}
+          PROD_SHA: ${{ needs.finn-commits.outputs.prod-sha }}
+          PROD_TAG: ${{ needs.finn-commits.outputs.prod-tag }}
+          PROD_STATUS: ${{ needs.deploy-prod.outputs.deployet == 'false' && 'hoppet over (nyere deploy)' || needs.deploy-prod.result }}
+        run: |
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          commit() { echo "[\`${1:0:7}\`]($url/commit/$1)"; }
+          release() { echo "[$1]($url/releases/tag/$1) ($(commit "$2"))"; }
+          # Rebygget bygger normalt samme commit som allerede kjører, med nytt baseimage.
+          endring() {  # forrige-sha ny-sha forrige-tekst ny-tekst
+            if [[ -z "$1" ]]; then echo "ukjent → $4"
+            elif [[ "$1" == "$2" ]]; then echo "$4 (samme commit, nytt baseimage)"
+            else echo "$3 → $4"
+            fi
+          }
+
+          dev=$(endring "$DEV_FORRIGE" "$GITHUB_SHA" "$(commit "$DEV_FORRIGE")" "$(commit "$GITHUB_SHA")")
+          if [[ "$PROD_VALGT" != 'true' ]]; then
+            prod='ikke valgt'
+          elif [[ -z "$PROD_SHA" ]]; then
+            prod='ingen publisert release'
+          else
+            prod="$(endring "$PROD_FORRIGE" "$PROD_SHA" "$(release "$PROD_FORRIGE_TAG" "$PROD_FORRIGE")" "$(release "$PROD_TAG" "$PROD_SHA")") · $PROD_STATUS"
+          fi
+          {
+            echo "- **Dev** ([$DEFAULT_BRANCH]($url/tree/$DEFAULT_BRANCH)): $dev · $DEV_STATUS"
+            echo "- **Prod**: $prod"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Slack-varsel
         if: env.SLACK_WEBHOOK != ''
         uses: rtCamp/action-slack-notify@06cc13f74fa8d4d2296c09455d91e9453e4025f4 # v2.4.1

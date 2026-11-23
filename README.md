@@ -14,7 +14,8 @@ Workflowen:
 1. Finner siste commit på standardbranchen og commiten for siste publiserte release.
 2. Bygger standardbranchen med tester, og deployer til dev-miljøene i rekkefølge. Neste miljø deployes bare hvis forrige gikk bra.
 3. Hvis `prod` er valgt: bygger siste release på nytt med tester, og deployer den til prod.
-4. Sender Slack-varsel med status for dev og prod.
+4. Skriver oppsummering med commiten som ble erstattet og den nye, og sender Slack-varsel
+   med status for dev og prod.
 
 Kode som ikke er releaset, kommer aldri i prod: prod får alltid siste publiserte release
 (også prerelease, som `deploy-prod` i appene).
@@ -38,6 +39,8 @@ sha-taggen peker fortsatt på imaget som ble testet ved merge.
 - **Manuell deploy til prod:** workflowen ser ikke hva som faktisk kjører i prod, bare siste
   publiserte release. Er en nyere commit deployet til prod manuelt etter siste release, ruller
   rebygget prod tilbake til releasen.
+- **Forrige commit i oppsummeringen:** hentes fra siste vellykkede kjøring av deploy-workflowene
+  (og tidligere rebygg for dev), ikke fra clusteret. Manuelle deployer kommer ikke med.
 
 ### Ta i bruk i en app
 
@@ -62,6 +65,7 @@ permissions:
   contents: read
   packages: read
   id-token: write
+  actions: read
 
 concurrency:
   group: rebygg-og-deploy
@@ -78,6 +82,8 @@ jobs:
         nais/vars-q2.json
         nais/vars-q1.json
       prod-cluster: prod-fss
+      dev-deploy-workflow: deploy-dev.yaml
+      prod-deploy-workflow: deploy-prod.yaml
       # Planlagt kjøring har ingen inputs, og skal deploye til prod.
       prod: ${{ github.event_name == 'schedule' || inputs.prod }}
     secrets:
@@ -102,13 +108,15 @@ første planlagte kjøring.
 | `platforms` | | `linux/amd64` | |
 | `runner` | | `ubuntu-latest` | Runner for byggejobbene |
 | `prod` | | `false` | Deploy også til prod |
+| `dev-deploy-workflow` | | | Appens vanlige deploy-workflow til dev. Uten den vises forrige commit i dev bare fra tidligere rebygg |
+| `prod-deploy-workflow` | | | Appens vanlige deploy-workflow til prod. Uten den vises forrige commit i prod som ukjent |
 
 | Secret | Beskrivelse |
 | --- | --- |
 | `READER_TOKEN` | Tilgjengelig i bygget som `READER_TOKEN` og `PASSWORD` |
 | `SLACK_WEBHOOK` | Varsler ikke hvis den mangler |
 
-Appens workflow må gi `contents: read`, `packages: read` og `id-token: write`. Hver jobb i
+Appens workflow må gi `contents: read`, `packages: read`, `id-token: write` og `actions: read`. Hver jobb i
 den felles workflowen får bare de tilgangene den trenger. Kjøres den fra en annen branch
 enn standardbranchen, hoppes alt over.
 
