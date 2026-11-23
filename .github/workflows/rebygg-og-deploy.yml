@@ -44,9 +44,10 @@ on:
         required: true
         type: string
       dev-vars:
-        description: Én til tre vars-filer for dev, én per linje. Deployes i rekkefølge, og stopper ved første feil.
-        required: true
+        description: Én til tre vars-filer for dev, én per linje. Deployes i rekkefølge, og stopper ved første feil. Påkrevd uten uten-vars.
+        required: false
         type: string
+        default: ''
       prod-cluster:
         required: true
         type: string
@@ -54,10 +55,35 @@ on:
         required: false
         type: string
         default: nais/vars-prod.json
+      uten-vars:
+        description: Appen har ingen vars-filer. Dev og prod deployes da én gang hver uten vars, og dev-vars og prod-vars brukes ikke.
+        required: false
+        type: boolean
+        default: false
+      dev-var:
+        description: Template-variabler for dev som key=value, kommaseparert (VAR i nais/deploy). Kommer i tillegg til vars-filene.
+        required: false
+        type: string
+        default: ''
+      prod-var:
+        description: Template-variabler for prod som key=value, kommaseparert (VAR i nais/deploy). Kommer i tillegg til vars-filen.
+        required: false
+        type: string
+        default: ''
       nais-resource:
         required: false
         type: string
         default: nais/nais.yml
+      dev-resource:
+        description: Nais-ressurs for dev, når den er en annen enn i prod. Overstyrer nais-resource.
+        required: false
+        type: string
+        default: ''
+      prod-resource:
+        description: Nais-ressurs for prod, når den er en annen enn i dev. Overstyrer nais-resource.
+        required: false
+        type: string
+        default: ''
       prod:
         description: Deploy også til prod
         required: false
@@ -193,8 +219,16 @@ jobs:
         id: vars
         env:
           VARS: ${{ inputs.dev-vars }}
+          UTEN_VARS: ${{ inputs.uten-vars }}
         run: |
           read -r -d '' -a filer <<< "$VARS" || true
+          if [[ "$UTEN_VARS" == 'true' ]]; then
+            if (( ${#filer[@]} > 0 )); then
+              echo "::error::dev-vars kan ikke brukes sammen med uten-vars"
+              exit 1
+            fi
+            exit 0
+          fi
           if (( ${#filer[@]} < 1 || ${#filer[@]} > 3 )); then
             echo "::error::dev-vars må ha én til tre filer, fikk ${#filer[@]}"
             exit 1
@@ -271,29 +305,32 @@ jobs:
             echo "deploy=false" >> "$GITHUB_OUTPUT"
             echo "$DEFAULT_BRANCH er nå $naa, ikke $SHA; hopper over dev-deploy" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-1 }}
+      - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-1 || inputs.dev-cluster }}
         if: steps.gjeldende.outputs.deploy == 'true'
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
-          RESOURCE: ${{ inputs.nais-resource }}
+          RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-1 }}
+          VAR: ${{ inputs.dev-var }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-2 }}
         if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-2 != ''
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
-          RESOURCE: ${{ inputs.nais-resource }}
+          RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-2 }}
+          VAR: ${{ inputs.dev-var }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-3 }}
         if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-3 != ''
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
-          RESOURCE: ${{ inputs.nais-resource }}
+          RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
           VARS: ${{ needs.finn-commits.outputs.dev-vars-3 }}
+          VAR: ${{ inputs.dev-var }}
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
 
   bygg-prod:
@@ -364,13 +401,14 @@ jobs:
             echo "deploy=false" >> "$GITHUB_OUTPUT"
             echo "Siste release er $tag ($naa), ikke $SHA; hopper over prod-deploy" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Deploy ${{ inputs.prod-vars }}
+      - name: Deploy ${{ !inputs.uten-vars && inputs.prod-vars || inputs.prod-cluster }}
         if: steps.gjeldende.outputs.deploy == 'true'
         uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
         env:
           CLUSTER: ${{ inputs.prod-cluster }}
-          RESOURCE: ${{ inputs.nais-resource }}
-          VARS: ${{ inputs.prod-vars }}
+          RESOURCE: ${{ inputs.prod-resource || inputs.nais-resource }}
+          VARS: ${{ !inputs.uten-vars && inputs.prod-vars || '' }}
+          VAR: ${{ inputs.prod-var }}
           IMAGE: ${{ needs.bygg-prod.outputs.image }}
           TIMEOUT: 20m
 
