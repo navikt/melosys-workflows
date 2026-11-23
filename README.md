@@ -100,10 +100,13 @@ første planlagte kjøring.
 | `byggverktoy` | ja | | `maven` eller `gradle` |
 | `java-versjon` | | `21` | |
 | `dev-cluster` | ja | | f.eks. `dev-fss` eller `dev-gcp` |
-| `dev-vars` | ja | | Én til tre vars-filer, én per linje, i deployrekkefølge |
+| `dev-vars` | ja, uten `uten-vars` | | Én til tre vars-filer, én per linje, i deployrekkefølge |
 | `prod-cluster` | ja | | f.eks. `prod-fss` eller `prod-gcp` |
 | `prod-vars` | | `nais/vars-prod.json` | |
+| `uten-vars` | | `false` | Appen har ingen vars-filer. Dev og prod deployes uten vars |
 | `nais-resource` | | `nais/nais.yml` | |
+| `dev-resource` | | | Nais-ressurs for dev, når den er en annen enn i prod. Overstyrer `nais-resource` |
+| `prod-resource` | | | Nais-ressurs for prod, når den er en annen enn i dev. Overstyrer `nais-resource` |
 | `team` | | `teammelosys` | |
 | `platforms` | | `linux/amd64` | |
 | `runner` | | `ubuntu-latest` | Runner for byggejobbene |
