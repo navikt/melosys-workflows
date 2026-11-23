@@ -6,7 +6,8 @@ name: Rebygg og deploy
 # https://sikkerhet.nav.no/docs/verktoy/chainguard-dockerimages
 #
 # Dev får siste commit på standardbranchen. Prod får koden fra siste publiserte release,
-# slik at rebygget aldri slipper ut kode som ikke er releaset. Dev og prod bygges og
+# slik at rebygget aldri slipper ut kode som ikke er releaset. Unntaket er apper som selv
+# deployer standardbranchen til prod uten release (prod-fra-standardbranch). Dev og prod bygges og
 # deployes uavhengig av hverandre: de bygger ulik kode, ingen tester kjører etter
 # dev-deployen, og Nais venter på readiness i prod. Feil i dev skal ikke holde prod
 # igjen med gammelt baseimage.
@@ -26,6 +27,16 @@ on:
         required: false
         type: string
         default: '21'
+      node-versjon:
+        description: Setter opp Node før bygget, f.eks. lts/* eller 24. Tom betyr ingen Node.
+        required: false
+        type: string
+        default: ''
+      pnpm-versjon:
+        description: Setter opp pnpm før bygget, f.eks. 10. Tom betyr ingen pnpm.
+        required: false
+        type: string
+        default: ''
       team:
         required: false
         type: string
@@ -89,6 +100,16 @@ on:
         required: false
         type: boolean
         default: false
+      uten-prerelease:
+        description: Prod får siste release som ikke er merket pre-release, for apper der deploy-prod hopper over prereleaser.
+        required: false
+        type: boolean
+        default: false
+      prod-fra-standardbranch:
+        description: For apper uten releaser, som deployer standardbranchen til både dev og prod. Prod får da samme image som dev, etter at dev-deployen gikk bra.
+        required: false
+        type: boolean
+        default: false
       dev-deploy-workflow:
         description: Appens vanlige deploy-workflow til dev, f.eks. deploy-dev.yaml. Brukes til å finne commiten som blir erstattet.
         required: false
@@ -129,11 +150,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        # Velger samme release som ligger i prod. deploy-prod deployer også releaser merket
-        # «pre-release», men GitHubs «Latest» hopper over dem. Drafts er ikke i prod.
+          UTEN_PRERELEASE: ${{ inputs.uten-prerelease }}
+          FRA_STANDARDBRANCH: ${{ inputs.prod-fra-standardbranch }}
+        # Velger samme release som ligger i prod. deploy-prod deployer vanligvis også releaser
+        # merket «pre-release», men GitHubs «Latest» hopper over dem. Drafts er ikke i prod.
         run: |
+          if [[ "$FRA_STANDARDBRANCH" == 'true' ]]; then
+            echo "prod-sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "prod-tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          utvalg='select(.draft | not)'
+          [[ "$UTEN_PRERELEASE" == 'true' ]] && utvalg+=' | select(.prerelease | not)'
           prod_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq '[.[] | select(.draft | not)] | max_by(.published_at) | .tag_name // ""')
+            --jq "[.[] | $utvalg] | max_by(.published_at) | .tag_name // \"\"")
           prod_sha=''
           if [[ -n "$prod_tag" ]]; then
             prod_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$prod_tag" --jq .sha)
@@ -152,6 +182,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DEV_WORKFLOW: ${{ inputs.dev-deploy-workflow }}
           PROD_WORKFLOW: ${{ inputs.prod-deploy-workflow }}
+          FRA_STANDARDBRANCH: ${{ inputs.prod-fra-standardbranch }}
         run: |
           siste_vellykkede() {
             [[ -n "$1" ]] || return 0
@@ -173,7 +204,12 @@ jobs:
           } | sort -r | head -1) || true
           # Tidligere rebygg tas ikke med for prod: de deployer siste release, som
           # deploy-workflowen allerede har deployet.
-          read -r _ prod_sha prod_tag < <(siste_vellykkede "$PROD_WORKFLOW" "") || true
+          if [[ "$FRA_STANDARDBRANCH" == 'true' ]]; then
+            read -r _ prod_sha _ < <(siste_vellykkede "$PROD_WORKFLOW" "&branch=$DEFAULT_BRANCH") || true
+            prod_tag=''
+          else
+            read -r _ prod_sha prod_tag < <(siste_vellykkede "$PROD_WORKFLOW" "") || true
+          fi
 
           {
             echo "dev-sha=$dev_sha"
@@ -190,6 +226,7 @@ jobs:
           PROD_FORRIGE_TAG: ${{ steps.forrige.outputs.prod-tag }}
           PROD_SHA: ${{ steps.finn.outputs.prod-sha }}
           PROD_TAG: ${{ steps.finn.outputs.prod-tag }}
+          FRA_STANDARDBRANCH: ${{ inputs.prod-fra-standardbranch }}
         run: |
           url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
           commit() { echo "[\`${1:0:7}\`]($url/commit/$1)"; }
@@ -207,6 +244,8 @@ jobs:
             prod='ikke valgt'
           elif [[ -z "$PROD_SHA" ]]; then
             prod='ingen publisert release'
+          elif [[ "$FRA_STANDARDBRANCH" == 'true' ]]; then
+            prod="$(endring "$PROD_FORRIGE" "$PROD_SHA" "$(commit "$PROD_FORRIGE")" "$(commit "$PROD_SHA")")"
           else
             prod=$(endring "$PROD_FORRIGE" "$PROD_SHA" "$(release "$PROD_FORRIGE_TAG" "$PROD_FORRIGE")" "$(release "$PROD_TAG" "$PROD_SHA")")
           fi
@@ -258,12 +297,21 @@ jobs:
           java-version: ${{ inputs.java-versjon }}
           distribution: temurin
           cache: ${{ inputs.byggverktoy }}
+      - uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        if: inputs.pnpm-versjon != ''
+        with:
+          version: ${{ inputs.pnpm-versjon }}
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        if: inputs.node-versjon != ''
+        with:
+          node-version: ${{ inputs.node-versjon }}
       - name: Bygg og test
         env:
           BYGG_KOMMANDO: ${{ inputs.bygg-kommando }}
           GITHUB_TOKEN: ${{ github.token }}
           READER_TOKEN: ${{ secrets.READER_TOKEN }}
           PASSWORD: ${{ secrets.READER_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.READER_TOKEN }}
         run: bash -c "$BYGG_KOMMANDO"
       # Ingen egen tag: imaget får en unik datotag, og deployen bruker digest. Sha-taggen
       # skal fortsatt peke på imaget som ble testet da commiten ble merget.
@@ -336,7 +384,7 @@ jobs:
   bygg-prod:
     name: Bygg release
     needs: finn-commits
-    if: inputs.prod && needs.finn-commits.outputs.prod-sha != ''
+    if: inputs.prod && !inputs.prod-fra-standardbranch && needs.finn-commits.outputs.prod-sha != ''
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
     permissions:
@@ -355,12 +403,21 @@ jobs:
           java-version: ${{ inputs.java-versjon }}
           distribution: temurin
           cache: ${{ inputs.byggverktoy }}
+      - uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        if: inputs.pnpm-versjon != ''
+        with:
+          version: ${{ inputs.pnpm-versjon }}
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        if: inputs.node-versjon != ''
+        with:
+          node-version: ${{ inputs.node-versjon }}
       - name: Bygg og test
         env:
           BYGG_KOMMANDO: ${{ inputs.bygg-kommando }}
           GITHUB_TOKEN: ${{ github.token }}
           READER_TOKEN: ${{ secrets.READER_TOKEN }}
           PASSWORD: ${{ secrets.READER_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.READER_TOKEN }}
         run: bash -c "$BYGG_KOMMANDO"
       - name: Bygg og publiser image
         id: docker-push
@@ -371,7 +428,13 @@ jobs:
 
   deploy-prod:
     name: Deploy til prod
-    needs: [ finn-commits, bygg-prod ]
+    needs: [ finn-commits, bygg-dev, deploy-dev, bygg-prod ]
+    # Med prod-fra-standardbranch deployes dev-imaget, og bare når dev-deployen gikk bra.
+    # Ellers er prod uavhengig av dev, og trenger bare bygget av releasen.
+    if: >-
+      !cancelled() && inputs.prod && needs.finn-commits.outputs.prod-sha != '' && (
+        inputs.prod-fra-standardbranch && needs.deploy-dev.result == 'success' && needs.deploy-dev.outputs.deployet == 'true'
+        || !inputs.prod-fra-standardbranch && needs.bygg-prod.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -386,20 +449,29 @@ jobs:
           persist-credentials: false
       # En release kan ha blitt publisert og deployet mens vi bygget. Samme oppslag som i
       # finn-commits.
-      - name: Er commiten fortsatt siste release?
+      - name: Er commiten fortsatt den siste?
         id: gjeldende
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.finn-commits.outputs.prod-sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          UTEN_PRERELEASE: ${{ inputs.uten-prerelease }}
+          FRA_STANDARDBRANCH: ${{ inputs.prod-fra-standardbranch }}
         run: |
-          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq '[.[] | select(.draft | not)] | max_by(.published_at) | .tag_name // ""')
+          if [[ "$FRA_STANDARDBRANCH" == 'true' ]]; then
+            tag=$DEFAULT_BRANCH
+          else
+            utvalg='select(.draft | not)'
+            [[ "$UTEN_PRERELEASE" == 'true' ]] && utvalg+=' | select(.prerelease | not)'
+            tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq "[.[] | $utvalg] | max_by(.published_at) | .tag_name // \"\"")
+          fi
           naa=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
           if [[ "$naa" == "$SHA" ]]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo "Siste release er $tag ($naa), ikke $SHA; hopper over prod-deploy" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Siste for prod er $tag ($naa), ikke $SHA; hopper over prod-deploy" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
       - name: Deploy ${{ !inputs.uten-vars && inputs.prod-vars || inputs.prod-cluster }}
         if: steps.gjeldende.outputs.deploy == 'true'
@@ -409,7 +481,7 @@ jobs:
           RESOURCE: ${{ inputs.prod-resource || inputs.nais-resource }}
           VARS: ${{ !inputs.uten-vars && inputs.prod-vars || '' }}
           VAR: ${{ inputs.prod-var }}
-          IMAGE: ${{ needs.bygg-prod.outputs.image }}
+          IMAGE: ${{ inputs.prod-fra-standardbranch && needs.bygg-dev.outputs.image || needs.bygg-prod.outputs.image }}
           TIMEOUT: 20m
 
   # Egen jobb, så feil i alle de andre jobbene også varsles.
@@ -432,6 +504,6 @@ jobs:
           SLACK_TITLE: Rebygg av ${{ github.event.repository.name }} ${{ contains(needs.*.result, 'failure') && 'feilet' || 'er ferdig' }}
           SLACK_MESSAGE: >-
             dev: ${{ needs.deploy-dev.outputs.deployet == 'false' && 'hoppet over (nyere deploy)' || needs.deploy-dev.result }}
-            · prod (${{ needs.finn-commits.outputs.prod-tag || 'ingen release' }}):
+            · prod (${{ needs.finn-commits.outputs.prod-tag || inputs.prod-fra-standardbranch && github.event.repository.default_branch || 'ingen release' }}):
             ${{ needs.deploy-prod.outputs.deployet == 'false' && 'hoppet over (nyere deploy)' || needs.deploy-prod.result }}
             · ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
