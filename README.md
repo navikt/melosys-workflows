@@ -18,7 +18,9 @@ Workflowen:
 4. Sender Slack-varsel med status for dev og prod.
 
 Kode som ikke er releaset, kommer aldri i prod: prod får alltid siste publiserte release
-(også prerelease, som `deploy-prod` i appene).
+(også prerelease, som `deploy-prod` i appene, med mindre `uten-prerelease` er satt).
+Unntaket er apper med `prod-fra-standardbranch`, som selv deployer standardbranchen til prod
+uten release. Der får prod samme image som dev, og bare hvis dev-deployen gikk bra.
 Rett før deployen til dev og til prod sjekkes det at commiten fortsatt er den siste. Har en
 vanlig deploy kommet med nyere kode mens vi bygget, hoppes deployen over, så den ikke rulles
 tilbake.
@@ -99,6 +101,8 @@ første planlagte kjøring.
 | `bygg-kommando` | ja | | Bygger og tester appen, f.eks. `./mvnw clean package -B` eller `./gradlew build` |
 | `byggverktoy` | ja | | `maven` eller `gradle` |
 | `java-versjon` | | `21` | |
+| `node-versjon` | | | Setter opp Node før bygget, f.eks. `lts/*`. `NODE_AUTH_TOKEN` får `READER_TOKEN` |
+| `pnpm-versjon` | | | Setter opp pnpm før bygget, f.eks. `10` |
 | `dev-cluster` | ja | | f.eks. `dev-fss` eller `dev-gcp` |
 | `dev-vars` | ja, uten `uten-vars` | | Én til tre vars-filer, én per linje, i deployrekkefølge |
 | `prod-cluster` | ja | | f.eks. `prod-fss` eller `prod-gcp` |
@@ -113,6 +117,8 @@ første planlagte kjøring.
 | `platforms` | | `linux/amd64` | |
 | `runner` | | `ubuntu-latest` | Runner for byggejobbene |
 | `prod` | | `false` | Deploy også til prod |
+| `uten-prerelease` | | `false` | Prod får siste release som ikke er pre-release, for apper der deploy-prod hopper over prereleaser |
+| `prod-fra-standardbranch` | | `false` | For apper uten releaser som deployer standardbranchen til både dev og prod. Prod får dev-imaget etter at dev-deployen gikk bra |
 | `dev-deploy-workflow` | | | Appens vanlige deploy-workflow til dev. Uten den vises forrige commit i dev bare fra tidligere rebygg |
 | `prod-deploy-workflow` | | | Appens vanlige deploy-workflow til prod. Uten den vises forrige commit i prod som ukjent |
 
