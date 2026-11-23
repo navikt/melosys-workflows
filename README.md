@@ -11,11 +11,11 @@ jevnlig, også når det ikke er endringer i egen kode
 
 Workflowen:
 
-1. Finner siste commit på standardbranchen og commiten for siste publiserte release.
+1. Finner siste commit på standardbranchen og commiten for siste publiserte release, og skriver
+   oppsummering med commiten som blir erstattet og den nye.
 2. Bygger standardbranchen med tester, og deployer til dev-miljøene i rekkefølge. Neste miljø deployes bare hvis forrige gikk bra.
 3. Hvis `prod` er valgt: bygger siste release på nytt med tester, og deployer den til prod.
-4. Skriver oppsummering med commiten som ble erstattet og den nye, og sender Slack-varsel
-   med status for dev og prod.
+4. Sender Slack-varsel med status for dev og prod.
 
 Kode som ikke er releaset, kommer aldri i prod: prod får alltid siste publiserte release
 (også prerelease, som `deploy-prod` i appene).

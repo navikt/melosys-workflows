@@ -94,9 +94,6 @@ jobs:
     outputs:
       prod-sha: ${{ steps.finn.outputs.prod-sha }}
       prod-tag: ${{ steps.finn.outputs.prod-tag }}
-      dev-forrige-sha: ${{ steps.forrige.outputs.dev-sha }}
-      prod-forrige-sha: ${{ steps.forrige.outputs.prod-sha }}
-      prod-forrige-tag: ${{ steps.forrige.outputs.prod-tag }}
       dev-vars-1: ${{ steps.vars.outputs.vars-1 }}
       dev-vars-2: ${{ steps.vars.outputs.vars-2 }}
       dev-vars-3: ${{ steps.vars.outputs.vars-3 }}
@@ -157,6 +154,40 @@ jobs:
             echo "prod-sha=$prod_sha"
             echo "prod-tag=$prod_tag"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Oppsummering
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DEV_FORRIGE: ${{ steps.forrige.outputs.dev-sha }}
+          PROD_VALGT: ${{ inputs.prod }}
+          PROD_FORRIGE: ${{ steps.forrige.outputs.prod-sha }}
+          PROD_FORRIGE_TAG: ${{ steps.forrige.outputs.prod-tag }}
+          PROD_SHA: ${{ steps.finn.outputs.prod-sha }}
+          PROD_TAG: ${{ steps.finn.outputs.prod-tag }}
+        run: |
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          commit() { echo "[\`${1:0:7}\`]($url/commit/$1)"; }
+          release() { echo "[$1]($url/releases/tag/$1) ($(commit "$2"))"; }
+          # Rebygget bygger normalt samme commit som allerede kjører, med nytt baseimage.
+          endring() {  # forrige-sha ny-sha forrige-tekst ny-tekst
+            if [[ -z "$1" ]]; then echo "ukjent → $4"
+            elif [[ "$1" == "$2" ]]; then echo "$4 (samme commit, nytt baseimage)"
+            else echo "$3 → $4"
+            fi
+          }
+
+          dev=$(endring "$DEV_FORRIGE" "$GITHUB_SHA" "$(commit "$DEV_FORRIGE")" "$(commit "$GITHUB_SHA")")
+          if [[ "$PROD_VALGT" != 'true' ]]; then
+            prod='ikke valgt'
+          elif [[ -z "$PROD_SHA" ]]; then
+            prod='ingen publisert release'
+          else
+            prod=$(endring "$PROD_FORRIGE" "$PROD_SHA" "$(release "$PROD_FORRIGE_TAG" "$PROD_FORRIGE")" "$(release "$PROD_TAG" "$PROD_SHA")")
+          fi
+          {
+            echo "- **Dev** ([$DEFAULT_BRANCH]($url/tree/$DEFAULT_BRANCH)): $dev"
+            echo "- **Prod**: $prod"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fordel dev-vars
         id: vars
@@ -345,7 +376,7 @@ jobs:
 
   # Egen jobb, så feil i alle de andre jobbene også varsles.
   varsle:
-    name: Slack-varsel og oppsummering
+    name: Slack-varsel
     needs: [ finn-commits, bygg-dev, deploy-dev, bygg-prod, deploy-prod ]
     if: always() && needs.finn-commits.result != 'skipped'
     runs-on: ubuntu-latest
@@ -353,41 +384,6 @@ jobs:
     env:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
     steps:
-      - name: Oppsummering
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          DEV_FORRIGE: ${{ needs.finn-commits.outputs.dev-forrige-sha }}
-          DEV_STATUS: ${{ needs.deploy-dev.outputs.deployet == 'false' && 'hoppet over (nyere deploy)' || needs.deploy-dev.result }}
-          PROD_VALGT: ${{ inputs.prod }}
-          PROD_FORRIGE: ${{ needs.finn-commits.outputs.prod-forrige-sha }}
-          PROD_FORRIGE_TAG: ${{ needs.finn-commits.outputs.prod-forrige-tag }}
-          PROD_SHA: ${{ needs.finn-commits.outputs.prod-sha }}
-          PROD_TAG: ${{ needs.finn-commits.outputs.prod-tag }}
-          PROD_STATUS: ${{ needs.deploy-prod.outputs.deployet == 'false' && 'hoppet over (nyere deploy)' || needs.deploy-prod.result }}
-        run: |
-          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          commit() { echo "[\`${1:0:7}\`]($url/commit/$1)"; }
-          release() { echo "[$1]($url/releases/tag/$1) ($(commit "$2"))"; }
-          # Rebygget bygger normalt samme commit som allerede kjører, med nytt baseimage.
-          endring() {  # forrige-sha ny-sha forrige-tekst ny-tekst
-            if [[ -z "$1" ]]; then echo "ukjent → $4"
-            elif [[ "$1" == "$2" ]]; then echo "$4 (samme commit, nytt baseimage)"
-            else echo "$3 → $4"
-            fi
-          }
-
-          dev=$(endring "$DEV_FORRIGE" "$GITHUB_SHA" "$(commit "$DEV_FORRIGE")" "$(commit "$GITHUB_SHA")")
-          if [[ "$PROD_VALGT" != 'true' ]]; then
-            prod='ikke valgt'
-          elif [[ -z "$PROD_SHA" ]]; then
-            prod='ingen publisert release'
-          else
-            prod="$(endring "$PROD_FORRIGE" "$PROD_SHA" "$(release "$PROD_FORRIGE_TAG" "$PROD_FORRIGE")" "$(release "$PROD_TAG" "$PROD_SHA")") · $PROD_STATUS"
-          fi
-          {
-            echo "- **Dev** ([$DEFAULT_BRANCH]($url/tree/$DEFAULT_BRANCH)): $dev · $DEV_STATUS"
-            echo "- **Prod**: $prod"
-          } >> "$GITHUB_STEP_SUMMARY"
       - name: Slack-varsel
         if: env.SLACK_WEBHOOK != ''
         uses: rtCamp/action-slack-notify@06cc13f74fa8d4d2296c09455d91e9453e4025f4 # v2.4.1
