@@ -305,6 +305,8 @@ jobs:
         if: inputs.node-versjon != ''
         with:
           node-version: ${{ inputs.node-versjon }}
+          # Skriver .npmrc som gir NODE_AUTH_TOKEN til @navikt-pakkene.
+          registry-url: https://npm.pkg.github.com
       - name: Bygg og test
         env:
           BYGG_KOMMANDO: ${{ inputs.bygg-kommando }}
@@ -411,6 +413,8 @@ jobs:
         if: inputs.node-versjon != ''
         with:
           node-version: ${{ inputs.node-versjon }}
+          # Skriver .npmrc som gir NODE_AUTH_TOKEN til @navikt-pakkene.
+          registry-url: https://npm.pkg.github.com
       - name: Bygg og test
         env:
           BYGG_KOMMANDO: ${{ inputs.bygg-kommando }}
