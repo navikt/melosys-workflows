@@ -292,16 +292,16 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: ${{ inputs.java-versjon }}
           distribution: temurin
           cache: ${{ inputs.byggverktoy }}
-      - uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         if: inputs.pnpm-versjon != ''
         with:
           version: ${{ inputs.pnpm-versjon }}
-      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: inputs.node-versjon != ''
         with:
           node-version: ${{ inputs.node-versjon }}
@@ -357,7 +357,7 @@ jobs:
           fi
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-1 || inputs.dev-cluster }}
         if: steps.gjeldende.outputs.deploy == 'true'
-        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        uses: nais/deploy/actions/deploy@427e29c94d911626a023a76f402f6dcae1f840b7 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
@@ -366,7 +366,7 @@ jobs:
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-2 }}
         if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-2 != ''
-        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        uses: nais/deploy/actions/deploy@427e29c94d911626a023a76f402f6dcae1f840b7 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
@@ -375,7 +375,7 @@ jobs:
           IMAGE: ${{ needs.bygg-dev.outputs.image }}
       - name: Deploy ${{ needs.finn-commits.outputs.dev-vars-3 }}
         if: steps.gjeldende.outputs.deploy == 'true' && needs.finn-commits.outputs.dev-vars-3 != ''
-        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        uses: nais/deploy/actions/deploy@427e29c94d911626a023a76f402f6dcae1f840b7 # v3
         env:
           CLUSTER: ${{ inputs.dev-cluster }}
           RESOURCE: ${{ inputs.dev-resource || inputs.nais-resource }}
@@ -400,16 +400,16 @@ jobs:
         with:
           ref: ${{ needs.finn-commits.outputs.prod-sha }}
           persist-credentials: false
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: ${{ inputs.java-versjon }}
           distribution: temurin
           cache: ${{ inputs.byggverktoy }}
-      - uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         if: inputs.pnpm-versjon != ''
         with:
           version: ${{ inputs.pnpm-versjon }}
-      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: inputs.node-versjon != ''
         with:
           node-version: ${{ inputs.node-versjon }}
@@ -479,7 +479,7 @@ jobs:
           fi
       - name: Deploy ${{ !inputs.uten-vars && inputs.prod-vars || inputs.prod-cluster }}
         if: steps.gjeldende.outputs.deploy == 'true'
-        uses: nais/deploy/actions/deploy@30ed20fc7021e78d03ca9544b0c561d37f826296 # v3
+        uses: nais/deploy/actions/deploy@427e29c94d911626a023a76f402f6dcae1f840b7 # v3
         env:
           CLUSTER: ${{ inputs.prod-cluster }}
           RESOURCE: ${{ inputs.prod-resource || inputs.nais-resource }}
